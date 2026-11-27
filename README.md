@@ -1,32 +1,41 @@
-# High-Dimensional Bayesian Optimization Benchmark & Algorithm-Selection Platform
+# Optimizer Lab
 
-A local interactive capstone prototype. Give four search methods the same synthetic problem and evaluation budget, inspect their convergence, and explain their ranking.
+An experiment notebook for the **High-Dimensional Bayesian Optimization Benchmark & Algorithm-Selection Platform** capstone. Create an account, configure a problem, and compare four optimizers under one evaluation budget. Each completed run is saved to that account and can be reopened or exported as JSON.
 
-## Run on Windows (Python 3.12)
-Open a terminal in this folder. First-time setup needs internet for packages.
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
-.\.venv\Scripts\python app.py
+## Run locally
+
+Install Node.js 22.13 or newer. From the project folder:
+
+```sh
+npm start
 ```
-Open http://127.0.0.1:8000 and click **Run benchmark**. Later runs only need the last command. Ctrl+C stops the server. On macOS/Linux use python3.12 to create the environment and .venv/bin/python for the remaining commands.
 
-## Two-minute review demo
-1. Start with the default Sphere task, 20 dimensions, five active, 40 evaluations and seed 7. Explain that only five hidden coordinates affect this objective. The optimizers never receive their identities.
-2. Click **Run benchmark**. The six shared starting points count toward each method's budget. Following them, each optimizer chooses its own evaluations.
-3. Show how the global GP wins the composite score even though the local trust-region GP finds the lowest final gap. Inspect the mean gap and calls to target to explain the trade-off.
-4. Open the score contributions. Change only the seed and rerun to show whether the shortlist changes. Export the JSON for each run. Use results/default-run.json as the offline record of the verified example.
+Open http://127.0.0.1:8000. Select **Create account** the first time. The app has no npm dependencies. SQLite stores accounts, sessions and runs in `notebook.sqlite`. Keeping that file preserves the notebook between launches. You can also start the same server with `python app.py` if Node is installed.
 
-## What is implemented
-- Shifted Sphere and Rastrigin objectives in 2–100 dimensions, configurable active coordinates, additive Gaussian noise, optional feasible-region restriction (mean input at most 0.5). Both synthetic objectives have a feasible minimum of zero. Inputs are in the unit cube.
-- Random and scrambled Sobol baselines, global Gaussian-process search, and adaptive trust-region Gaussian-process search. The GP uses an RBF covariance, fixed regularization and lower-confidence-bound acquisition over sampled feasible candidates. The local variant expands after three successes and shrinks after four misses. This is a simplified local method.
-- Every method shares the problem, initial design and per-evaluation noise sequence. Optimizers see noisy values. The evaluator reports the best latent value sampled, possible because the benchmark objective is known. Reported times depend on the computer.
-- The score combines within-run min–max utilities for final gap (50%), mean best-so-far gap (30%), and first call to halve the best warm-start gap (20%). Unreached targets receive budget + 1. Tied metric ranges give equal credit. Score ties preserve portfolio order.
-- The explanation is exact for this additive ranking rule. Each metric's Shapley contribution is its weighted utility minus the portfolio-average weighted utility. The three contributions plus average score recover the displayed score. This explains the ranking rule, not causal effects of input dimensions.
-- The ranking is retrospective on the specified task. The prototype does not predict the best algorithm for unseen tasks. Full TuRBO, SAASBO, BoTorch, a learned selector, and SHAP/LIME library integrations from the proposed architecture remain extensions. One seeded run illustrates behavior; cross-seed, cross-dimension comparisons are needed for general performance claims.
+## A two-minute review
 
-## Verify
-Run `python verify.py` with the environment's Python. It checks shared starts, budgets, reproducibility, monotone convergence and additive explanations on the default and noisy constrained 100-D settings.
+1. Sign in. The chart initially shows the labelled reference run. The reference does not count as a saved experiment.
+2. Keep Sphere, 20 dimensions, five active coordinates, seed 7 and 40 evaluations. Click **Run benchmark**. Each optimizer starts with the same six samples and has 34 further evaluations.
+3. Inspect the ranking. In the included browser reference the trust-region GP has the highest composite score. The global GP reaches the target on call 14, one evaluation earlier. Open the scoring explanation to see why final accuracy and the full trajectory change the ranking.
+4. Switch to **Saved experiments**, reopen the run and export its JSON. Change just the seed or objective and repeat. This is a task-specific comparison; general conclusions require repeated trials.
 
-## GitHub upload
-Target: https://github.com/charanx66/Capstone_final_review . To preserve existing work, clone the target, copy the extracted project files into that checkout, then commit and push from it. Use a new branch if the default branch is protected. Leave .venv out of Git.
+## How a run works
+
+- **Interface** (`index.html`, `web/ui.js`, `web/style.css`). The sign-in page and workbench share a chart drawn from measured results. A separate browser worker keeps the form responsive during computation.
+- **Experiment** (`web/engine.js`). Generate a shifted Sphere or Rastrigin function in 2–100 dimensions. Only the selected hidden coordinates affect the true objective. All algorithms receive the same warm start and additive noise sequence. The optional constraint restricts the mean input to at most 0.5.
+- **Portfolio**. Random sampling, digitally shifted Sobol, global RBF Gaussian process and adaptive trust-region GP. Both GPs evaluate a lower confidence bound over sampled candidates. The trust region expands after three improvements and contracts after four misses. The Sobol direction numbers are extracted from SciPy's Joe–Kuo table.
+- **Score**. Min–max scale each metric within the run. Final gap carries 50%, mean best-so-far gap 30%, and calls to halve the best warm-start gap 20%. An unreached target counts as budget + 1. The additive contributions show the points above or below the average method for each metric. Runtime is recorded separately. The evaluator uses the known latent objective; the search sees noisy observations.
+- **Persistence** (`server/api.js`). Salted password digests and expiring, revocable cookie sessions. Every experiment lookup includes the current account ID. Browser-computed measurements are stored as submitted, so this is a personal notebook rather than a verified multi-user leaderboard. Local storage uses SQLite; the deployed Worker uses D1 with the same SQL schema. Local and hosted accounts are separate.
+- **Python reference** (`benchmark.py`). The earlier NumPy/SciPy implementation and its sample output remain in the repository. The interactive engine has a different seeded random generator and candidate-pool size. Compare results within the same engine. Browser and Python reference outputs have distinct filenames under `results/`.
+
+## Checks
+
+```sh
+npm test
+```
+
+The tests exercise the default task and a noisy constrained 100-D task, shared starts, convergence and ranking. The notebook test covers registration, sign-in, duplicate names, wrong passwords, persistence after restart, user isolation and sign-out. For the separate Python reference, install `requirements.txt` with Python 3.12 and run `python verify.py`.
+
+## Boundaries of the prototype
+
+The shortlist ranks completed benchmarks. Full TuRBO, SAASBO, a learned selector for unseen tasks and SHAP/LIME integrations are extensions from the original project proposal. The local method is a simplified trust-region GP. Experiments use synthetic objectives with a known minimum.
