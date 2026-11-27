@@ -10,6 +10,9 @@ const config={objective:'Sphere',d:20,active:5,budget:40,seed:7,noise:0,constrai
 test('common starts, score decomposition and repeatability',()=>{
   for(const c of [config,{...config,d:100,budget:18,constrained:true,noise:.1,objective:'Rastrigin'}]){
     const a=benchmark(c),b=benchmark(c);
+    assert.equal(a.rows.length,6);
+    assert.ok(a.rows.some(r=>r.method==="Differential evolution"));
+    assert.ok(a.rows.some(r=>r.method==="GP expected improvement"));
     a.rows.forEach((r,i)=>{
       assert.deepEqual(r.trace,b.rows[i].trace);assert.equal(r.trace.length,c.budget);
       assert.deepEqual(r.trace.slice(0,6),a.rows[0].trace.slice(0,6));

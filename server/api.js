@@ -9,11 +9,13 @@ function matches(a,b){let diff=a.length^b.length;for(let i=0;i<a.length;i++)diff
 const reply=(data,status=200,headers={})=>Response.json(data,{status,headers:{'cache-control':'no-store',...headers}});
 function validResult(r){
   const c=r?.config;
-  return r?.engine==='browser-gp-v1'&&c&&['Sphere','Rastrigin'].includes(c.objective)&&
+  const legacy=['Random','Sobol','Gaussian process','Trust-region GP'];
+  const methods=r?.engine==='browser-gp-v1'?legacy:[...legacy,'GP expected improvement','Differential evolution'];
+  return ['browser-gp-v1','browser-gp-v2'].includes(r?.engine)&&c&&['Sphere','Rastrigin'].includes(c.objective)&&
     [c.d,c.active,c.budget,c.seed].every(Number.isInteger)&&c.d>=2&&c.d<=100&&c.active>=1&&c.active<=c.d&&
     c.budget>=12&&c.budget<=120&&c.seed>=0&&c.seed<=999999&&Number.isFinite(c.noise)&&c.noise>=0&&c.noise<=1&&typeof c.constrained==='boolean'&&
-    Number.isFinite(r.target)&&Number.isFinite(r.baseline)&&Array.isArray(r.rows)&&r.rows.length===4&&
-    new Set(r.rows.map(v=>v?.method)).size===4&&r.rows.every(v=>v&&['Random','Sobol','Gaussian process','Trust-region GP'].includes(v.method)&&
+    Number.isFinite(r.target)&&Number.isFinite(r.baseline)&&Array.isArray(r.rows)&&r.rows.length===methods.length&&
+    new Set(r.rows.map(v=>v?.method)).size===methods.length&&r.rows.every(v=>v&&methods.includes(v.method)&&
       Array.isArray(v.trace)&&v.trace.length===c.budget&&v.trace.every(Number.isFinite)&&
       [v.score,v.final_gap,v.mean_gap,v.seconds,v.target_calls,...['final_gap','mean_gap','target_calls'].map(k=>v.contributions?.[k])].every(Number.isFinite));
 }

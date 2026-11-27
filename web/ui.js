@@ -1,5 +1,5 @@
 const el=id=>document.getElementById(id);
-const colors={'Random':'#ce9de0','Sobol':'#ffb478','Gaussian process':'#cce985','Trust-region GP':'#71cddb'};
+const colors={'Random':'#ce9de0','Sobol':'#ffb478','Gaussian process':'#cce985','Trust-region GP':'#71cddb','GP expected improvement':'#9aaeff','Differential evolution':'#fc91a0'};
 const names={final_gap:'final gap',mean_gap:'mean gap',target_calls:'calls to target'};
 let mode='login',shown,reference,owner,worker,tabSession,pendingSave,revision=0;
 async function api(path,body){
@@ -12,7 +12,7 @@ async function api(path,body){
   if(!response.ok){throw Object.assign(Error(data.error||'Request failed.'),{status:response.status});}
   return data;
 }
-function chart(data,axes=true){
+function chart(data,axes=true,visible=null){
   const w=740,h=axes?225:150,left=axes?56:0,top=10,bottom=h-(axes?36:8),right=w-8;
   const peak=Math.max(...data.rows.map(r=>r.trace[0]))||1, budget=data.config.budget;
   const y=v=>bottom-v/peak*(bottom-top),x=i=>left+i/(budget-1)*(right-left);
@@ -21,14 +21,29 @@ function chart(data,axes=true){
     const v=peak*j/4;content+='<path stroke="#365354" d="M'+left+' '+y(v)+'H'+right+'"/>';
     if(axes)content+='<text x="'+(left-6)+'" y="'+(y(v)+4)+'" text-anchor="end">'+v.toPrecision(2)+'</text>';
   }
-  for(const r of data.rows)content+='<polyline fill="none" stroke-width="2.7" stroke="'+colors[r.method]+'" points="'+r.trace.map((v,i)=>x(i)+','+y(v)).join(' ')+'"/>';
+  for(const r of data.rows.filter(r=>!visible||visible.has(r.method)))content+='<polyline fill="none" stroke-width="2.7" stroke="'+colors[r.method]+'" points="'+r.trace.map((v,i)=>x(i)+','+y(v)).join(' ')+'"/>';
   if(axes)content+='<text x="'+left+'" y="'+(h-8)+'">1</text><text x="340" y="'+(h-8)+'">Evaluation</text><text x="'+right+'" y="'+(h-8)+'" text-anchor="end">'+budget+'</text>';
   return '<svg class="plot" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="Best objective gap by evaluation">'+content+'</svg>';
 }
 function render(result,type){
   shown=result; const c=result.config;
   el('chartType').textContent=type;el('caption').textContent=c.objective+' · '+c.d+' dimensions · '+c.active+' active · '+c.budget+' evaluations per method · seed '+c.seed;
-  el('plot').innerHTML=chart(result);el('legend').innerHTML=Object.entries(colors).map(([k,c])=>'<span><i style="background:'+c+'"></i>'+k+'</span>').join('');
+  el('leader').textContent=result.rows[0].method;
+  el('bestGap').textContent=Math.min(...result.rows.map(r=>r.final_gap)).toPrecision(3);
+  el('calls').textContent=c.budget*result.rows.length;
+  const visible=new Set(result.rows.map(r=>r.method));
+  const plot=()=>{el('plot').innerHTML=chart(result,true,visible);};
+  plot();el('legend').replaceChildren();
+  for(const {method} of result.rows){
+    const chip=document.createElement('button');
+    chip.textContent=method;chip.style.setProperty('--series',colors[method]);
+    chip.setAttribute('aria-pressed','true');chip.title='Show or hide '+method;
+    chip.onclick=()=>{
+      if(visible.has(method))visible.delete(method);else visible.add(method);
+      chip.setAttribute('aria-pressed',String(visible.has(method)));plot();
+    };
+    el('legend').append(chip);
+  }
   const tbody=el('ranking');tbody.replaceChildren();
   for(const r of result.rows){
     const tr=tbody.insertRow();

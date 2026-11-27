@@ -1,5 +1,5 @@
 import {directions} from './sobol.js';
-const methods = ['Random','Sobol','Gaussian process','Trust-region GP'];
+const methods = ['Random','Sobol','Gaussian process','Trust-region GP','GP expected improvement','Differential evolution'];
 const mean = a => a.reduce((sum,x)=>sum+x,0)/a.length;
 
 function generator(seed) {
@@ -13,7 +13,24 @@ function generator(seed) {
 }
 
 // Cholesky factor of K + jitter for a Gaussian-process posterior.
-function gpModel(points, observed, dimension) {
+function normalCdf(z) {
+  // Five-term approximation of the standard normal distribution function.
+  const t=1/(1+.2316419*Math.abs(z));
+  const tail=Math.exp(-z*z/2)/Math.sqrt(2*Math.PI)*t*(.319381530+t*(-.356563782+t*(1.781477937+t*(-1.821255978+t*1.330274429))));
+  return z>=0?1-tail:tail;
+}
+
+function differentialTrial(population,target,random){
+  const donors=population.filter((_,i)=>i!==target);
+  for(let i=0;i<3;i++){
+    const j=i+Math.floor(random()*(donors.length-i));
+    [donors[i],donors[j]]=[donors[j],donors[i]];
+  }
+  const [a,b,c]=donors, forced=Math.floor(random()*a.length);
+  return population[target].map((v,j)=>j===forced||random()<.7?Math.max(0,Math.min(1,a[j]+.6*(b[j]-c[j]))):v);
+}
+
+function gpModel(points, observed, dimension, expectedImprovement) {
   const n=points.length, L=new Float64Array(n*n);
   function kernel(a,b) {
     let distance=0;
@@ -33,6 +50,7 @@ function gpModel(points, observed, dimension) {
   }
   // Both alpha and k are whitened; their dot product is the posterior mean.
   const cross=new Float64Array(n);
+  const incumbent=(Math.min(...observed)-avg)/scale;
   return candidate=>{
     let prediction=0,variance=1;
     for(let i=0;i<n;i++){
@@ -41,7 +59,14 @@ function gpModel(points, observed, dimension) {
       cross[i]=value/L[i*n+i];
       prediction+=alpha[i]*cross[i]; variance-=cross[i]**2;
     }
-    return prediction-1.6*Math.sqrt(Math.max(variance,0));
+    const sd=Math.sqrt(Math.max(variance,0));
+    if(expectedImprovement){
+      const gain=incumbent-prediction;
+      if(sd<1e-10)return -Math.max(0,gain);
+      const z=gain/sd;
+      return -(gain*normalCdf(z)+sd*Math.exp(-.5*z*z)/Math.sqrt(2*Math.PI));
+    }
+    return prediction-1.6*sd;
   };
 }
 
@@ -66,6 +91,7 @@ export function benchmark(config, progress=()=>{}) {
   const rows=methods.map((method,m)=>{
     const start=performance.now(), random=generator(seed+10007*(m+1));
     const points=[],observed=[],trace=[],shift=Array.from({length:d},()=>Math.floor(random()*4096));
+    const population=warm.slice(),fitness=[];
     let sequence=0, radius=.5,wins=0,misses=0,best=0;
     function sobol(){
       const gray=sequence^(sequence>>>1); sequence++;
@@ -76,15 +102,23 @@ export function benchmark(config, progress=()=>{}) {
     }
     for(let i=0;i<budget;i++){
       let p;
+      const targetIndex=i%warm.length;
       if(i<6) p=warm[i];
       else if(m===0) p=feasible(()=>randomPoint(random));
       else if(m===1) p=feasible(sobol);
-      else {
-        const acquisition=gpModel(points,observed,d);
+      else if(method==='Differential evolution'){
+        // A bounded retry avoids stalling on constrained populations.
+        for(let attempt=0;attempt<32&&!p;attempt++){
+          const trial=differentialTrial(population,targetIndex,random);
+          if(allowed(trial))p=trial;
+        }
+        if(!p)p=feasible(()=>randomPoint(random));
+      }else {
+        const acquisition=gpModel(points,observed,d,method==='GP expected improvement');
         let lowest=Infinity;
         for(let j=0;j<128;j++){
           const trial=Array.from({length:d},(_,k)=>{
-            if(m===2) return random();
+            if(method!=='Trust-region GP') return random();
             const low=Math.max(0,points[best][k]-radius),high=Math.min(1,points[best][k]+radius);
             return low+(high-low)*random();
           });
@@ -95,6 +129,9 @@ export function benchmark(config, progress=()=>{}) {
         if(!p) p=feasible(()=>randomPoint(random));
       }
       const value=loss(p), measurement=value+errors[i], improved=i===0||measurement<observed[best];
+      if(method==='Differential evolution'&&(i<6||measurement<=fitness[targetIndex])){
+        population[targetIndex]=p;fitness[targetIndex]=measurement;
+      }
       if(m===3&&i>=6){
         wins=improved?wins+1:0; misses=improved?0:misses+1;
         if(wins===3){radius=Math.min(.8,radius*2);wins=0;}
@@ -102,7 +139,7 @@ export function benchmark(config, progress=()=>{}) {
       }
       if(improved) best=i;
       points.push(p);observed.push(measurement);trace.push(i?Math.min(value,trace[i-1]):value);
-      if(i%5===0||i===budget-1) progress({method,completed:m*budget+i+1,total:4*budget});
+      if(i%5===0||i===budget-1) progress({method,completed:m*budget+i+1,total:methods.length*budget});
     }
     const reached=trace.findIndex(v=>v<=target);
     return {method,trace,final_gap:trace.at(-1),mean_gap:mean(trace),target_calls:reached<0?budget+1:reached+1,
@@ -115,5 +152,5 @@ export function benchmark(config, progress=()=>{}) {
     baseline+=avg;
     rows.forEach((r,i)=>{r.score+=points[i];r.contributions[key]=points[i]-avg;});
   }
-  return {engine:'browser-gp-v1',config,rows:rows.sort((a,b)=>b.score-a.score),target,baseline};
+  return {engine:'browser-gp-v2',config,rows:rows.sort((a,b)=>b.score-a.score),target,baseline};
 }
