@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Optimizer benchmark</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#ecf2f1;color:#18332e;font:16px/1.5 system-ui,sans-serif}main{width:min(1120px,94vw);margin:42px auto}h1{font-size:clamp(28px,4vw,48px);margin:0;letter-spacing:-.045em}h2{font-size:23px;margin:0 0 12px}section,form{background:white;border:1px solid #cddbd7;padding:22px;border-radius:12px;margin:16px 0}form{display:flex;align-items:end;flex-wrap:wrap;gap:12px}label{display:grid;gap:4px;font-size:14px}input,select,button{font:inherit;padding:8px;border:1px solid #a9bdb6;border-radius:6px}input[type=number]{width:96px}button{background:#175947;color:white;cursor:pointer}button:disabled{opacity:.5}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:9px;border-bottom:1px solid #dae5e2;white-space:nowrap}section{overflow:auto}summary{cursor:pointer}svg{width:100%;min-width:440px}svg text{font:13px system-ui;fill:#354b45}#legend span{margin-right:20px}#status{min-height:1.5em}
+</style><main><h1>Optimizer benchmark</h1><p>Compare black-box search methods on a high-dimensional task. Lower objective values are better.</p>
+<form id="controls"><label>Objective<select name="objective"><option>Sphere</option><option>Rastrigin</option></select></label>
+<label>Dimensions<input type="number" name="d" value="20" min="2" max="100" required></label><label>Active dimensions<input type="number" name="active" value="5" min="1" max="100" required></label>
+<label>Evaluations<input type="number" name="budget" value="40" min="12" max="120" required></label><label>Seed<input type="number" name="seed" value="7" min="0" max="999999" required></label>
+<label>Noise SD<input type="number" name="noise" value="0" min="0" max="1" step="any" required></label><label><span>Constraint</span><span><input type="checkbox" name="constrained"> Mean x ≤ 0.5</span></label>
+<button id="go">Run benchmark</button></form><p id="status" role="status"></p><article id="results" hidden>
+<section><h2>Ranked shortlist</h2><table><thead><tr><th>Rank</th><th>Method</th><th>Score / 100</th><th>Final gap</th><th>Mean gap</th><th>Calls to target</th><th>Time (s)</th></tr></thead><tbody id="ranks"></tbody></table><p id="target"></p></section>
+<section><h2>Convergence</h2><p>Best true objective gap observed through each evaluation.</p><svg id="plot" viewBox="0 0 800 260" role="img" aria-label="Convergence curves by optimizer"></svg><div id="legend"></div></section>
+<section><h2>Why did the winner rank first?</h2><p id="reason"></p><details><summary>Inspect every score contribution</summary><div id="details"></div></details></section>
+<button id="save">Download experiment (JSON)</button></article></main>
+<script>
+const el=id=>document.getElementById(id);
+const colors={'Random':'#7254a3','Sobol':'#af4f11','Gaussian process':'#17606f','Trust-region GP':'#007e55'};
+const labels={final_gap:'final gap',mean_gap:'mean gap',target_calls:'calls to target'};
+let result;
+function render(data){
+ const rows=data.rows, budget=data.config.budget;
+ el('ranks').innerHTML=rows.map((r,i)=>`<tr><td>${i+1}</td><td>${r.method}</td><td>${r.score.toFixed(2)}</td><td>${r.final_gap.toPrecision(4)}</td><td>${r.mean_gap.toPrecision(4)}</td><td>${r.target_calls>budget?'Unreached':r.target_calls}</td><td>${r.seconds.toFixed(3)}</td></tr>`).join('');
+ el('target').textContent='Target gap ≤ '+data.target.toPrecision(4)+' (half the best warm-start gap). Unreached targets count as budget + 1 for scoring.';
+ const peak=Math.max(...rows.map(r=>r.trace[0]))||1;
+ const x=i=>78+690*i/(budget-1), y=v=>210-178*v/peak;
+ let svg='';
+ for(let i=0;i<=4;i++){const v=peak*i/4;svg+=`<path d="M78 ${y(v)}h690" stroke="#dce6e2"/><text x="69" y="${y(v)+4}" text-anchor="end">${v.toPrecision(2)}</text>`;}
+ for(const r of rows){svg+=`<polyline points="${r.trace.map((v,i)=>x(i)+','+y(v)).join(' ')}" stroke="${colors[r.method]}" fill="none" stroke-width="2.5"/>`;}
+ el('plot').innerHTML=svg+`<text x="78" y="235">1</text><text x="400" y="245">Evaluation</text><text x="750" y="235">${budget}</text>`;
+ el('legend').innerHTML=rows.map(r=>`<span style="color:${colors[r.method]}">━ ${r.method}</span>`).join('');
+ const explain=r=>Object.entries(r.contributions).map(([k,v])=>(v>=0?'+':'')+v.toFixed(2)+' from '+labels[k]).join(', ');
+ el('reason').textContent=rows[0].method+' scored '+rows[0].score.toFixed(2)+' points. Relative to the portfolio average of '+data.baseline.toFixed(2)+', its contributions were '+explain(rows[0])+'.';
+ el('details').innerHTML='<p>Score weights are 50% final gap, 30% mean gap and 20% calls to target. Each metric is scaled within this run. Time is reported separately.</p>'+rows.map(r=>'<p><b>'+r.method+'</b> · '+explain(r)+'</p>').join('');
+ el('results').hidden=false;
+}
+el('controls').onsubmit=async e=>{
+ e.preventDefault();const form=e.currentTarget;
+ if(+form.active.value>+form.d.value){el('status').textContent='Active dimensions must be at most the total dimensions.';return;}
+ el('results').hidden=true;el('go').disabled=true;el('status').textContent='Running four optimizers…';
+ try{const resp=await fetch('/run?'+new URLSearchParams(new FormData(form)));if(!resp.ok)throw Error('Run failed. Check the input ranges.');result=await resp.json();render(result);el('status').textContent='Completed · '+result.config.d+' dimensions · '+result.config.budget+' evaluations per method · seed '+result.config.seed;}
+ catch(err){el('status').textContent=err.message;}finally{el('go').disabled=false;}
+};
+el('save').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='benchmark-seed-'+result.config.seed+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+</script></html>
