@@ -41,3 +41,22 @@ test('register, authenticate, compute, persist across restart, isolate histories
     assert.equal((await request('logout',{},cookie)).status,200);assert.equal((await request('me',null,cookie)).status,401);
   }finally{await stop();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('saving from a tab with cookies withheld uses a revocable session',async()=>{
+  const server=startServer(':memory:',0);await once(server,'listening');
+  try{
+    const base='http://127.0.0.1:'+server.address().port+'/api/';
+    const headers={'Content-Type':'application/json'};
+    const post=(path,data)=>fetch(base+path,{method:'POST',headers,body:JSON.stringify(data)});
+    const account={username:'tab_user',password:'test-only-password'};
+    await post('register',account);
+    const {tabSession}=await (await post('login',account)).json();
+    assert.equal((await fetch(base+'me')).status,401);
+    headers['X-Notebook-Session']=tabSession;
+    const saved=await post('runs',{result:benchmark(config)});assert.equal(saved.status,201);
+    const {id}=await saved.json();
+    assert.equal((await fetch(base+'runs/'+id,{headers})).status,200);
+    await post('logout',{});
+    assert.equal((await fetch(base+'runs/'+id,{headers})).status,401);
+  }finally{await new Promise(ok=>server.close(ok));}
+});

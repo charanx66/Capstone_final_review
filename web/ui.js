@@ -1,11 +1,15 @@
 const el=id=>document.getElementById(id);
 const colors={'Random':'#ce9de0','Sobol':'#ffb478','Gaussian process':'#cce985','Trust-region GP':'#71cddb'};
 const names={final_gap:'final gap',mean_gap:'mean gap',target_calls:'calls to target'};
-let mode='login',shown,reference,owner,worker,revision=0;
+let mode='login',shown,reference,owner,worker,tabSession,pendingSave,revision=0;
 async function api(path,body){
-  const response=await fetch('/api/'+path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const headers={};
+  if(tabSession)headers['X-Notebook-Session']=tabSession;
+  if(body!==undefined)headers['Content-Type']='application/json';
+  const response=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers,
+    credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body)});
   const data=await response.json();
-  if(!response.ok){if(response.status===401&&owner)signOutView();throw Error(data.error||'Request failed.');}
+  if(!response.ok){throw Object.assign(Error(data.error||'Request failed.'),{status:response.status});}
   return data;
 }
 function chart(data,axes=true){
@@ -45,20 +49,27 @@ function view(history){
   el('historyTab').setAttribute('aria-pressed',history);el('newTab').setAttribute('aria-pressed',!history);
 }
 function signOutView(){
-  revision++;owner=null;worker?.terminate();worker=null;shown=null;
+  revision++;owner=null;tabSession=null;pendingSave=null;el('reauth').hidden=true;worker?.terminate();worker=null;shown=null;
   el('desk').hidden=true;el('identity').hidden=true;el('gate').hidden=false;el('entries').replaceChildren();el('run').disabled=false;el('status').textContent='';el('settings').reset();el('auth').reset();changeMode('login');
 }
 function enter(user){
-  owner=user.username;el('user').textContent=owner;
+  tabSession=user.tabSession||null;owner=user.username;el('user').textContent=owner;
   el('desk').hidden=false;el('identity').hidden=false;el('gate').hidden=true;view(false);render(reference,'Reference run');
 }
 el('loginTab').onclick=()=>changeMode('login');el('registerTab').onclick=()=>changeMode('register');
 el('auth').onsubmit=async e=>{
   e.preventDefault();el('authGo').disabled=true;
-  try{enter(await api(mode,Object.fromEntries(new FormData(e.target))));el('auth').reset();}
+  try{
+    enter(await api(mode,Object.fromEntries(new FormData(e.target))));el('auth').reset();
+    const pending=pendingSave;pendingSave=null;
+    if(pending&&pending.owner===owner){
+      render(pending.result,'Current run');
+      await saveResult(pending.result,revision);
+    }
+  }
   catch(err){el('authMsg').textContent=err.message;}finally{el('authGo').disabled=false;}
 };
-el('logout').onclick=async()=>{try{await api('logout',{});signOutView();}catch(err){alert(err.message);}};
+el('logout').onclick=async()=>{try{await api('logout',{});signOutView();}catch(err){if(err.status===401)signOutView();else alert(err.message);}};
 el('newTab').onclick=()=>view(false);
 el('historyTab').onclick=async()=>{
   const stamp=revision;view(true);const box=el('entries');box.textContent='Loading experiments…';
@@ -69,12 +80,27 @@ el('historyTab').onclick=async()=>{
         catch(err){box.textContent=err.message;}};box.append(b);}
   }catch(err){box.textContent=err.message;}
 };
+el('reauth').onclick=()=>{
+  const pending=pendingSave;
+  signOutView();pendingSave=pending;
+  el('authMsg').textContent='Sign in to the same account to save this run.';
+};
+async function saveResult(result,stamp){
+  try{
+    await api('runs',{result});
+    if(stamp===revision){render(result,'Saved run');el('status').textContent='Saved to your experiments.';}
+  }catch(err){
+    if(stamp!==revision)return;
+    el('status').textContent='Result ready. '+(err.status===401?'Your session expired. Sign in to save, or export the JSON.':'Save failed. Export the JSON to keep this run.');
+    if(err.status===401){pendingSave={owner,result};el('reauth').hidden=false;}
+  }
+}
 el('settings').onsubmit=e=>{
   e.preventDefault();const f=e.target.elements;
   const c={objective:f.objective.value,constrained:f.constrained.checked};
   for(const k of ['d','active','budget','noise','seed'])c[k]=Number(f[k].value);
   if(c.active>c.d){el('status').textContent='Active dimensions must fit within total dimensions.';return;}
-  el('run').disabled=true;el('status').textContent='Starting benchmark…';const stamp=revision;
+  pendingSave=null;el('reauth').hidden=true;el('run').disabled=true;el('status').textContent='Starting benchmark…';const stamp=revision;
   worker=new Worker('/web/compute.js',{type:'module'});
   function finish(){worker?.terminate();worker=null;el('run').disabled=false;}
   worker.onerror=()=>{el('status').textContent='The benchmark worker stopped. Try running it again.';finish();};
@@ -82,9 +108,8 @@ el('settings').onsubmit=e=>{
     if(data.progress){const p=data.progress;el('status').textContent=p.method+' · '+p.completed+' / '+p.total+' evaluations';return;}
     if(data.error){el('status').textContent=data.error;finish();return;}
     render(data.result,'Current run');el('status').textContent='Saving experiment…';
-    try{await api('runs',{result:data.result});if(stamp===revision){render(data.result,'Saved run');el('status').textContent='Saved to your experiments.';}}
-    catch(err){if(stamp===revision)el('status').textContent='Save failed. Export the result to keep a copy. '+err.message;}
-    finally{if(stamp===revision)finish();}
+    await saveResult(data.result,stamp);
+    if(stamp===revision)finish();
   };worker.postMessage(c);
 };
 el('export').onclick=()=>{

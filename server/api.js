@@ -48,9 +48,12 @@ export async function api(request,db){
     }
     const token=crypto.randomUUID()+crypto.randomUUID();
     await query('INSERT INTO sessions VALUES (?,?,?)',await hash(token),account.id,now+7*86400000).run();
-    return reply({username},200,{'set-cookie':cookie(token,604800)});
+    return reply({username,tabSession:token},200,{'set-cookie':cookie(token,604800)});
   }
-  const token=request.headers.get('cookie')?.match(/(?:^|;\s*)lab_session=([\w-]{72})(?:;|$)/)?.[1];
+  const cookieToken=request.headers.get('cookie')?.match(/(?:^|;\s*)lab_session=([\w-]{72})(?:;|$)/)?.[1];
+  // Embedded browsers can accept the login response but omit the cookie on later requests.
+  const presented=request.headers.get('x-notebook-session');
+  const token=presented===null?cookieToken:(/^[a-f0-9-]{72}$/.test(presented)?presented:null);
   const digest=token?await hash(token):'';
   const user=token&&await query('SELECT a.id,a.username FROM accounts a JOIN sessions s ON s.owner=a.id WHERE s.token=? AND s.expires>?',digest,now).first();
   if(!user)return reply({error:'Please sign in.'},401);
